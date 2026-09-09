@@ -36,12 +36,54 @@ import {
   Shield,
   ScrollText,
 } from 'lucide-react';
-const roleList = ['狼人', '预言家', '女巫', '猎人', '村民'];
+const roleList = [
+  '狼人',
+  '觉醒隐狼',
+  '魔镜少女',
+  '女巫',
+  '猎人',
+  '守卫',
+  '村民',
+];
+const stringActions = ['potion', 'signup', 'withdraw', 'direction'];
+function choiceLabel(v: any) {
+  return (
+    (
+      {
+        join: '报名上警',
+        stay: '保留 / 不上警',
+        withdraw: '退水',
+        clockwise: '顺时针，警长最后发言',
+        counterclockwise: '逆时针，警长最后发言',
+        none: '不用药',
+        save: '使用解药',
+      } as any
+    )[v] ??
+    (v === 0
+      ? '弃权 / 不行动'
+      : String(v).startsWith('poison:')
+        ? '毒杀 ' + String(v).split(':')[1] + '号'
+        : v + '号')
+  );
+}
 const types: any = {
+  copy: '觉醒隐狼模仿',
+  guard: '守卫行动',
+  extraKill: '额外狼刀',
+  copyPoison: '模仿毒药',
+  signup: '报名上警',
+  signupSelect: '全体同时选择是否上警',
+  withdraw: '退水选择',
+  direction: '选择发言方向',
+  badge: '移交警徽',
+  sheriffSpeech: '警上发言',
+  ballot: '同时投票',
   night: '夜间行动',
   wolfChat: '狼队密谈',
+  wolfStart: '狼队准备选择目标',
+  wolfSelect: '狼人正在选择袭击目标',
   kill: '选择袭击目标',
-  inspect: '预言家查验',
+  inspect: '魔镜少女查验',
   potion: '女巫用药',
   dawn: '等待天亮',
   dayStart: '白天开始',
@@ -94,15 +136,18 @@ export default function Home() {
     [characters, setCharacters] = useState<any[]>([]),
     [seat, setSeat] = useState(1),
     [mode, setMode] = useState('normal'),
-    [role, setRole] = useState('村民'),
+    [role, setRole] = useState('random'),
     [god, setGod] = useState('blind'),
     [assigned, setAssigned] = useState([
       '狼人',
       '狼人',
       '狼人',
-      '预言家',
+      '觉醒隐狼',
+      '魔镜少女',
       '女巫',
       '猎人',
+      '守卫',
+      '村民',
       '村民',
       '村民',
       '村民',
@@ -121,12 +166,17 @@ export default function Home() {
     [replay, setReplay] = useState<any>(null),
     [filter, setFilter] = useState('all'),
     [notice, setNotice] = useState(''),
-    [trial, setTrial] = useState('介绍自己，并说说你会怎样找出狼人。');
+    [trial, setTrial] = useState('介绍自己，并说说你会怎样找出狼人。'),
+    [now, setNow] = useState(Date.now());
   const lock = useRef(false),
     clock = useRef(0),
     lastTick = useRef(0),
     latest = useRef<any>(null);
+  const [submittingTask, setSubmittingTask] = useState('');
   const g = screen === 'replay' ? replay : data?.game;
+  const inspectionResults = (
+    g?.players.find((p: any) => p.human)?.knowledge || []
+  ).filter((k: any) => k.kind === 'inspect' && k.day === g?.day);
   const c = characters[seat - 1];
   async function api(body?: any) {
     const r = await fetch(
@@ -140,6 +190,7 @@ export default function Home() {
         : undefined,
     );
     const d: any = await r.json();
+    d.clockOffset = (d.serverNow || Date.now()) - Date.now();
     if (!r.ok) throw Error(d.error || '操作失败');
     return d;
   }
@@ -148,6 +199,7 @@ export default function Home() {
     lock.current = true;
     setBusy(true);
     setError('');
+    if (body.op === 'step' && g?.task?.human) setSubmittingTask(g.task.type);
     try {
       const d = await api(body);
       setData(d);
@@ -161,6 +213,7 @@ export default function Home() {
     } finally {
       lock.current = false;
       setBusy(false);
+      setSubmittingTask('');
     }
   }
   useEffect(() => {
@@ -203,10 +256,41 @@ export default function Home() {
       );
   }, [draft, remaining, g?.id, g?.revision]);
   const logs = g?.events || [];
-  const publicSpeech = [...logs]
-    .reverse()
-    .find((e: any) => ['speech', 'lastWords', 'wolfChat'].includes(e.kind));
-  const spoken = publicSpeech?.text || '月色渐深，等待下一段故事。';
+  const isVoting = !!g?.ballot;
+  const publicSpeech = g?.awaitingAdvance ? g.displaySpeech : null;
+  const voteSeconds = g?.ballot?.deadline
+    ? Math.max(0, (g.ballot.deadline - now - (data?.clockOffset || 0)) / 1000)
+    : 5;
+  const spoken = isVoting
+    ? g.ballot.status === 'waiting'
+      ? '投票准备中。倒计时开始后，你和所有AI同时选择。'
+      : '全体同时投票，剩余 ' +
+        voteSeconds.toFixed(1) +
+        ' 秒。截止后未提交视为弃票，所有票型统一公布。'
+    : publicSpeech?.text || g?.stage || '月色渐深，等待下一段故事。';
+  useEffect(() => {
+    if (screen !== 'game') return;
+    let active = true;
+    let pending = false;
+    const id = setInterval(async () => {
+      if (pending || lock.current) return;
+      pending = true;
+      try {
+        const d = await api();
+        if (active && !lock.current)
+          setData((old: any) =>
+            !old?.serverNow || d.serverNow >= old.serverNow ? d : old,
+          );
+      } catch {
+      } finally {
+        pending = false;
+      }
+    }, 250);
+    return () => {
+      active = false;
+      clearInterval(id);
+    };
+  }, [screen]);
   latest.current = {
     g,
     screen,
@@ -216,6 +300,7 @@ export default function Home() {
     hold,
     speed,
     spoken,
+    isVoting,
     visible,
   };
   useEffect(() => {
@@ -224,6 +309,7 @@ export default function Home() {
       const now = Date.now(),
         delta = Math.min(250, now - lastTick.current);
       lastTick.current = now;
+      setNow(now);
       if (
         !x?.g ||
         x.screen !== 'game' ||
@@ -232,10 +318,16 @@ export default function Home() {
         lock.current
       )
         return;
+      if (x.g.ballot?.status === 'open') return;
       clock.current += delta;
       setVisible((v) => Math.min(x.spoken.length, v + x.speed / 10));
+      if (x.g.awaitingAdvance) return;
       if (x.g.task?.human) {
-        if (['speech', 'lastWords', 'wolfChat'].includes(x.g.task.type)) {
+        if (
+          ['speech', 'lastWords', 'wolfChat', 'sheriffSpeech'].includes(
+            x.g.task.type,
+          )
+        ) {
           setRemaining((v) => Math.max(0, v - delta / 1000));
           if (x.remaining <= 0)
             void act({
@@ -246,16 +338,40 @@ export default function Home() {
         }
         return;
       }
-      if (
-        clock.current >=
-        x.hold * 1000 + Math.min(15000, (x.spoken.length / x.speed) * 1000)
-      ) {
-        clock.current = 0;
-        void act({ op: 'step', revision: x.g.revision });
-      }
     }, 100);
     return () => clearInterval(timer);
   }, []);
+  useEffect(() => {
+    if (
+      !g ||
+      screen !== 'game' ||
+      g.paused ||
+      g.winner ||
+      g.awaitingAdvance ||
+      g.task?.human ||
+      g.wolfSelection ||
+      g.signupSelection ||
+      g.ballot?.status === 'open' ||
+      busy ||
+      lock.current ||
+      data?.busy
+    )
+      return;
+    void act({ op: 'step', revision: g.revision });
+  }, [
+    screen,
+    g?.id,
+    g?.revision,
+    g?.paused,
+    g?.awaitingAdvance,
+    g?.task?.type,
+    g?.task?.human,
+    !!g?.wolfSelection,
+    !!g?.signupSelection,
+    g?.ballot?.status,
+    busy,
+    data?.busy,
+  ]);
   useEffect(() => {
     const ctx = (document as any).modelContext;
     if (!ctx?.registerTool) return;
@@ -395,13 +511,13 @@ export default function Home() {
             >
               进入村庄 <ArrowUpRight />
             </Button>
-            {data?.game && !data.game.winner && (
+            {data?.game && !data.game.winner && !data.game.legacy && (
               <Button variant="outline" onClick={() => setScreen('game')}>
                 继续对局 · 第{data.game.day}天
               </Button>
             )}
           </div>
-          <p className="hint">九人无警长 · 纯文字 · 本地存档</p>
+          <p className="hint">12人镜隐迷踪 · 有警长 · 纯文字 · 本地存档</p>
         </section>
         <nav className="lobby-nav">
           <Button
@@ -433,13 +549,17 @@ export default function Home() {
       </main>
     );
   function dialogs() {
-    if (modal === 'end')
+    if (modal === 'end' || modal === 'explode')
       return (
         <AlertDialog open onOpenChange={(open) => !open && setModal('')}>
           <AlertDialogContent className="dialog">
-            <AlertDialogTitle>结束当前对局？</AlertDialogTitle>
+            <AlertDialogTitle>
+              {modal === 'explode' ? '确认狼人自爆？' : '结束当前对局？'}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              本局将保存到历史并揭晓身份，无法继续。
+              {modal === 'explode'
+                ? '你将公开狼人身份并出局，白天提前结束。'
+                : '本局将保存到历史并揭晓身份，无法继续。'}
             </AlertDialogDescription>
             <div className="row">
               <Button variant="outline" onClick={() => setModal('')}>
@@ -449,11 +569,15 @@ export default function Home() {
                 className="danger"
                 disabled={busy}
                 onClick={async () => {
-                  const d = await act({ op: 'archive' });
+                  const d = await act(
+                    modal === 'explode'
+                      ? { op: 'explode', revision: g.revision }
+                      : { op: 'archive' },
+                  );
                   if (d) setModal('');
                 }}
               >
-                结束并揭晓身份
+                {modal === 'explode' ? '确认自爆' : '结束并揭晓身份'}
               </Button>
             </div>
           </AlertDialogContent>
@@ -476,7 +600,7 @@ export default function Home() {
               ? '设置保存在本机，密钥仅从本地服务读取。'
               : modal === 'end'
                 ? '本局将存入历史并揭晓全部身份，无法继续。'
-                : '九人 · 无警长 · 暗牌 · 屠边'}
+                : '12人 · 有警长 · 暗牌 · 屠边'}
           </DialogDescription>
           {modal === 'settings' ? (
             <>
@@ -491,16 +615,6 @@ export default function Home() {
                   Key、模型名称及人民币单价。此处不接收密钥。
                 </p>
               </div>
-              <label className="field">
-                发言后停留：{hold} 秒
-                <Slider
-                  aria-label="发言后停留秒数"
-                  min={1}
-                  max={15}
-                  value={[hold]}
-                  onValueChange={(v) => setHold(Array.isArray(v) ? v[0] : v)}
-                />
-              </label>
               <label className="field">
                 文字速度：{speed} 字/秒
                 <Slider
@@ -560,22 +674,28 @@ export default function Home() {
           ) : (
             <div className="rules">
               <p>
-                三名狼人、三名村民，预言家、女巫、猎人各一名。狼人全部出局则好人胜；村民或神职全部出局则狼人胜。
+                镜隐迷踪：3普通狼人、1觉醒隐狼、4村民，魔镜少女、女巫、猎人、守卫各1；有警长、暗牌、屠边。
               </p>
               <p>
-                夜间依次狼队讨论与投刀、预言家查验、女巫用药。狼刀平票为空刀。女巫仅首夜可自救，每夜最多一瓶药；解药用完后不再获知刀口。
+                觉醒隐狼与普通狼互不相认，一局一次模仿并立即得知、伪装目标身份，今夜结束后获得技能。普通狼全部出局后取得刀权。模仿狼人另有一次额外狼刀；模仿女巫只有一瓶毒药；模仿守卫可以挡刀和毒且不可连守；模仿猎人非毒死可开枪；模仿魔镜少女可查具体身份。
               </p>
               <p>
-                白天依座位发言并投票。平票者PK，其他存活者再投；再次平票或全弃票则无人出局。
+                魔镜少女每夜查一人的具体身份，不可重复。觉醒隐狼已模仿时显示模仿身份，未模仿时显示觉醒隐狼。
               </p>
               <p>
-                猎人被刀或放逐可以开枪，中毒不可开枪。首夜出局和白天出局有遗言；胜负已成立时直接结算。
+                女巫全程不可自救、每夜最多一药。守卫可自守但不可连守，同守同救被刀者仍出局。猎人毒死不能开枪。
               </p>
               <p>
-                不设警长、白狼王或狼人自爆。普通对局出局后保持盲视角，结束后统一揭晓。导演可在开局前选择全知视角。
+                首夜行动后全体同时选择是否上警，全部确认后公布上警名单，再进行竞选发言、退水、警下投票，随后公布死亡。平票PK一次，再平票无警长。警长放逐票权1.5、选择发言方向并最后归票，出局可移交或撕徽。
               </p>
               <p>
-                参考常见网易玩法，以上为本作固定规则，并非官方客户端的完整复刻。
+                普通狼人可自刀和白天自爆，觉醒隐狼不可自爆。密谈后共同选刀，最高票并列时随机确定一个目标；空刀不参与目标竞争，全部空刀则无人被刀。警上第一次自爆延后竞选，第二次自爆吞警徽。
+              </p>
+              <p>
+                所有可见发言结束后由你手动点下一位。不可见的狼队密谈自动推进。警长投票和放逐投票都同时开放5秒；超时、模型未及时返回或失败均弃票。投票期间不能暂停，票型在截止后统一公布。
+              </p>
+              <p>
+                普通规则参考网易官方，手动发言与5秒投票采用你的自定义设置。旧九人存档仅作历史查看。
               </p>
             </div>
           )}
@@ -619,7 +739,7 @@ export default function Home() {
                   />
                   <h3>{p.name}</h3>
                   <p>
-                    {p.id === 9 && mode !== 'director' ? '你的座位' : p.mbti}
+                    {p.id === 12 && mode !== 'director' ? '你的座位' : p.mbti}
                   </p>
                   <small>{p.traits}</small>
                 </button>
@@ -765,12 +885,12 @@ export default function Home() {
                 ['director', '导演观战'],
               ]}
             />
-            {mode === 'practice' && (
+            {mode !== 'director' && (
               <Pick
-                label="你的身份"
+                label="我的身份（开局分配）"
                 value={role}
                 onChange={setRole}
-                items={roleList.map((x) => [x, x])}
+                items={[['random', '随机身份'], ...roleList.map((x) => [x, x])]}
               />
             )}
             <Pick
@@ -892,10 +1012,12 @@ export default function Home() {
           <p className="eyebrow">
             {g.demo ? 'RULE DEMO · 规则演示' : 'DEEPSEEK · LIVE GAME'}
           </p>
-          <h2>
+          <h2 aria-live="polite" aria-atomic="true">
             {g.winner
-              ? g.winner + (g.winner === '中途结束' ? '' : '阵营获胜')
-              : `第 ${g.day} ${g.phase === 'night' ? '夜' : '天'} · ${types[g.task?.type] || '对局进行中'}`}
+              ? g.legacy
+                ? '九人旧版存档 · 只读保留'
+                : g.winner + (g.winner === '中途结束' ? '' : '阵营获胜')
+              : `第 ${g.day} ${g.phase === 'night' ? '夜' : '天'} · ${g.stage || types[g.task?.type] || '对局进行中'}`}
           </h2>
         </div>
         <div className="row">
@@ -903,7 +1025,11 @@ export default function Home() {
             ¥{g.spent.toFixed(3)} / ¥{g.budget}
           </span>
           {screen === 'game' && !g.winner && (
-            <Button variant="outline" onClick={pause}>
+            <Button
+              variant="outline"
+              disabled={g.ballot?.status === 'open'}
+              onClick={pause}
+            >
               {g.paused ? <Play /> : <Pause />}
               {g.paused ? '继续' : '暂停'}
             </Button>
@@ -923,7 +1049,12 @@ export default function Home() {
                 className={
                   'player ' +
                   (!p.alive ? 'dead ' : '') +
-                  (g.task?.actor === p.id ? 'speaking' : '')
+                  ((g.awaitingAdvance
+                    ? g.displaySpeech?.actor
+                    : g.task?.actor) === p.id
+                    ? 'speaking'
+                    : '') +
+                  (g.ballot?.eligible.includes(p.id) ? ' voting-player' : '')
                 }
               >
                 <span className="seat-no">{p.id}号</span>
@@ -931,7 +1062,15 @@ export default function Home() {
                   seat={Number(p.avatarIndex ?? p.id - 1) + 1}
                   avatar={p.avatar}
                 />
-                <strong>{p.name}</strong>
+                <strong>
+                  {p.name}
+                  {p.sheriff ? ' · 警长' : ''}
+                </strong>
+                {g.ballot?.eligible.includes(p.id) && (
+                  <span className="vote-seat-state">
+                    {g.ballot.submitted.includes(p.id) ? '已提交' : '投票中'}
+                  </span>
+                )}
                 <small>
                   {p.role || '身份未知'} · {p.alive ? '存活' : '已出局'}
                 </small>
@@ -939,6 +1078,31 @@ export default function Home() {
               </div>
             ))}
           </div>
+          {inspectionResults.length > 0 && (
+            <section
+              className="inspection-result panel"
+              role="status"
+              aria-live="polite"
+            >
+              <p className="eyebrow">查验完成 · 仅你可见</p>
+              {inspectionResults.map((k: any) => (
+                <h2 key={k.day + '-' + k.target}>
+                  第{k.day}夜 · {k.target}号 · {k.result}
+                </h2>
+              ))}
+              <p>
+                结果已保存。
+                {g.paused
+                  ? '对局已暂停。'
+                  : '其他角色继续行动中，你可以随时查看。'}
+              </p>
+            </section>
+          )}
+          {submittingTask === 'inspect' && (
+            <p className="inspection-pending" role="status">
+              正在提交查验，请稍候…
+            </p>
+          )}
           <article className="speech panel">
             <p className="eyebrow">
               {g.winner
@@ -952,9 +1116,11 @@ export default function Home() {
             {g.winner ? (
               <>
                 <h2>
-                  {g.winner === '中途结束'
-                    ? '故事暂告一段落'
-                    : g.winner + '阵营获胜'}
+                  {g.legacy
+                    ? '九人旧版存档'
+                    : g.winner === '中途结束'
+                      ? '故事暂告一段落'
+                      : g.winner + '阵营获胜'}
                 </h2>
                 <p>身份已揭晓。右侧可以回顾投票、夜间行动和决策摘要。</p>
                 <Button
@@ -970,36 +1136,217 @@ export default function Home() {
             ) : (
               <>
                 <h2>
-                  {publicSpeech
-                    ? `${publicSpeech.actor}号 · ${g.players[publicSpeech.actor - 1]?.name}`
-                    : '月夜村庄'}
+                  {isVoting
+                    ? g.ballot.kind === 'sheriff'
+                      ? '警长竞选投票'
+                      : '放逐投票'
+                    : publicSpeech
+                      ? `${publicSpeech.actor}号 · ${g.players[publicSpeech.actor - 1]?.name}`
+                      : g.stage || '月夜村庄'}
                 </h2>
                 <p className="speech-text">
-                  {g.paused ? spoken : spoken.slice(0, Math.floor(visible))}
-                  <span className="cursor">▏</span>
+                  {g.paused || isVoting || !g.awaitingAdvance
+                    ? spoken
+                    : spoken.slice(0, Math.floor(visible))}
+                  {!isVoting && <span className="cursor">▏</span>}
                 </p>
                 <div className="hint">
                   {g.paused
-                    ? '已暂停，继续后自动推进'
+                    ? '已暂停，恢复后继续当前阶段'
                     : busy
                       ? '正在处理，请稍候…'
                       : g.task?.human
                         ? '轮到你行动'
-                        : '文字展示后自动进入下一位'}
+                        : isVoting
+                          ? '全体同时投票，5秒到时统一结算'
+                          : g.awaitingAdvance
+                            ? '阅读完毕后，请手动点击下一位'
+                            : '正在进入下一项行动'}
                 </div>
               </>
             )}
           </article>
           <section className="actions panel">
-            {!g.winner && screen === 'game' && g.task?.human ? (
+            {!g.winner && screen === 'game' && g.signupSelection ? (
+              <div className="signup-selection">
+                <h2>全体同时选择是否上警</h2>
+                <p>所有人独立确认，全部完成后统一公布上警名单。</p>
+                {g.signupSelection.error && (
+                  <p role="alert">{g.signupSelection.error}</p>
+                )}
+                {g.signupSelection.humanEligible &&
+                !g.signupSelection.humanSubmitted ? (
+                  <div className="row">
+                    <Button
+                      className="gold"
+                      disabled={busy || g.paused}
+                      onClick={() =>
+                        act({
+                          op: 'signupChoice',
+                          selectionId: g.signupSelection.id,
+                          choice: 'join',
+                        })
+                      }
+                    >
+                      我要上警
+                    </Button>
+                    <Button
+                      variant="outline"
+                      disabled={busy || g.paused}
+                      onClick={() =>
+                        act({
+                          op: 'signupChoice',
+                          selectionId: g.signupSelection.id,
+                          choice: 'stay',
+                        })
+                      }
+                    >
+                      不上警
+                    </Button>
+                  </div>
+                ) : (
+                  <p>
+                    {g.signupSelection.humanSubmitted
+                      ? '你已确认，等待其他人完成选择。'
+                      : '其他玩家正在选择，请稍候。'}
+                  </p>
+                )}
+                <p className="hint">
+                  已确认 {g.signupSelection.submittedCount} /{' '}
+                  {g.signupSelection.total} 人
+                </p>
+              </div>
+            ) : !g.winner && screen === 'game' && g.wolfSelection ? (
+              <div className="wolf-selection">
+                <h2>狼队同时选择目标</h2>
+                <p>密谈结束后共同选择，收齐后按最高票结算，并列最高票随机。</p>
+                {g.wolfSelection.error && (
+                  <p role="alert">{g.wolfSelection.error}</p>
+                )}
+                {g.wolfSelection.humanEligible &&
+                !g.wolfSelection.humanSubmitted ? (
+                  <>
+                    <div className="targets">
+                      {g.wolfSelection.choices.map((v: any) => (
+                        <Button
+                          key={v}
+                          variant="outline"
+                          className={choice === String(v) ? 'chosen' : ''}
+                          disabled={busy || g.paused}
+                          onClick={() => setChoice(String(v))}
+                        >
+                          {v === 0 ? '空刀' : v + '号'}
+                        </Button>
+                      ))}
+                    </div>
+                    <Button
+                      className="gold"
+                      disabled={busy || g.paused || choice === ''}
+                      onClick={() =>
+                        act({
+                          op: 'wolfChoice',
+                          selectionId: g.wolfSelection.id,
+                          choice: Number(choice),
+                        })
+                      }
+                    >
+                      确认狼刀
+                    </Button>
+                  </>
+                ) : (
+                  <p>
+                    {g.wolfSelection.humanSubmitted
+                      ? '你已提交，等待其他狼人完成选择。'
+                      : '狼人正在选择目标，请等待夜间流程继续。'}
+                  </p>
+                )}
+              </div>
+            ) : !g.winner && screen === 'game' && g.ballot ? (
+              <div className="ballot-panel">
+                <div className="row">
+                  <h2>
+                    {g.ballot.kind === 'sheriff' ? '选举警长' : '放逐投票'}
+                  </h2>
+                  <strong className="ballot-clock" role="timer">
+                    {voteSeconds.toFixed(1)} 秒
+                  </strong>
+                </div>
+                <p>同时投票 · 5秒截止 · 未提交视为弃票</p>
+                {g.ballot.humanEligible && !g.ballot.humanSubmitted ? (
+                  <>
+                    <div className="targets">
+                      {g.ballot.choices.map((v: any) => (
+                        <Button
+                          key={v}
+                          variant="outline"
+                          className={choice === String(v) ? 'chosen' : ''}
+                          disabled={
+                            voteSeconds <= 0 || g.ballot.status !== 'open'
+                          }
+                          onClick={() => setChoice(String(v))}
+                        >
+                          {choiceLabel(v)}
+                        </Button>
+                      ))}
+                    </div>
+                    <Button
+                      className="gold"
+                      disabled={
+                        busy ||
+                        choice === '' ||
+                        voteSeconds <= 0 ||
+                        g.ballot.status !== 'open'
+                      }
+                      onClick={() =>
+                        act({
+                          op: 'ballotVote',
+                          ballotId: g.ballot.id,
+                          choice: Number(choice),
+                        })
+                      }
+                    >
+                      确认投票
+                    </Button>
+                  </>
+                ) : (
+                  <p>
+                    {g.ballot.humanSubmitted
+                      ? '你已提交，等待倒计时结束。'
+                      : '本轮你没有投票权，请等待结果。'}
+                  </p>
+                )}
+                <p className="hint">
+                  已提交 {g.ballot.submitted.length} /{' '}
+                  {g.ballot.eligible.length} 人
+                </p>
+              </div>
+            ) : !g.winner && screen === 'game' && g.awaitingAdvance ? (
+              <div className="row">
+                <p>本段发言已结束，由你控制下一位。</p>
+                <Button
+                  className="gold"
+                  disabled={busy || g.paused}
+                  onClick={() => act({ op: 'advance', revision: g.revision })}
+                >
+                  下一位 / 继续流程 <ArrowUpRight />
+                </Button>
+              </div>
+            ) : !g.winner && screen === 'game' && g.task?.human ? (
               <>
                 <div className="row">
                   <strong>{types[g.task.type]}</strong>
-                  {['speech', 'lastWords', 'wolfChat'].includes(
-                    g.task.type,
-                  ) && <span className="timer">{Math.ceil(remaining)} 秒</span>}
+                  {[
+                    'speech',
+                    'lastWords',
+                    'wolfChat',
+                    'sheriffSpeech',
+                  ].includes(g.task.type) && (
+                    <span className="timer">{Math.ceil(remaining)} 秒</span>
+                  )}
                 </div>
-                {['speech', 'lastWords', 'wolfChat'].includes(g.task.type) ? (
+                {['speech', 'lastWords', 'wolfChat', 'sheriffSpeech'].includes(
+                  g.task.type,
+                ) ? (
                   <>
                     <textarea
                       aria-label="你的发言"
@@ -1039,15 +1386,7 @@ export default function Home() {
                           variant="outline"
                           onClick={() => setChoice(String(v))}
                         >
-                          {v === 0
-                            ? '弃权 / 不行动'
-                            : v === 'none'
-                              ? '不用药'
-                              : v === 'save'
-                                ? '使用解药'
-                                : String(v).startsWith('poison:')
-                                  ? '毒杀 ' + v.split(':')[1] + '号'
-                                  : v + '号'}
+                          {choiceLabel(v)}
                         </Button>
                       ))}
                     </div>
@@ -1063,10 +1402,9 @@ export default function Home() {
                           op: 'step',
                           revision: g.revision,
                           action: {
-                            choice:
-                              g.task.type === 'potion'
-                                ? choice
-                                : Number(choice),
+                            choice: stringActions.includes(g.task.type)
+                              ? choice
+                              : Number(choice),
                           },
                         })
                       }
@@ -1091,6 +1429,24 @@ export default function Home() {
             )}
           </section>
           <div className="row">
+            {g.canWithdraw && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => act({ op: 'withdraw', revision: g.revision })}
+              >
+                退水
+              </Button>
+            )}
+            {g.canExplode && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => setModal('explode')}
+              >
+                狼人自爆
+              </Button>
+            )}
             {g.mode !== 'director' && (
               <Button variant="outline" onClick={() => setModal('identity')}>
                 <Shield />

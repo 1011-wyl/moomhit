@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {parseAction,responseMetadata,MAX_OUTPUT_TOKENS} from '../lib/game/model-response.mjs';
+const speech={task:{type:'speech'},choices:[]};
+const result=(content,finish_reason='stop')=>({choices:[{message:{content,reasoning_content:'PRIVATE'},finish_reason}],usage:{completion_tokens:4096}});
+test('completed speech is parsed and thinking stays private',()=>{assert.equal(MAX_OUTPUT_TOKENS,16384);assert.deepEqual(parseAction(result('{"text":"我怀疑二号","choice":null}'),speech),{text:'我怀疑二号',choice:null,rationale:''});assert(!JSON.stringify(responseMetadata(result(''))).includes('PRIVATE'));});
+test('truncated responses cannot become game actions even when JSON parses',()=>{assert.throws(()=>parseAction(result('{"text":"不完整"}','length'),speech),/截断/);});
+test('empty final content never falls back to private reasoning',()=>{assert.throws(()=>parseAction(result(''),speech),/空的最终答案/);});
+test('complete JSON fence supported without attempting unsafe repairs',()=>{assert.equal(parseAction(result('```json\n{"text":"完整发言"}\n```'),speech).text,'完整发言');assert.throws(()=>parseAction(result('{"text":"半段'),speech),/JSON/);});
+test('schema and legal action validation',()=>{assert.throws(()=>parseAction(result('null'),speech),/结构/);assert.throws(()=>parseAction(result('{}'),speech),/有效发言/);const vote={task:{type:'vote'},choices:[0,2,3]};assert.equal(parseAction(result('{"choice":"2"}'),vote).choice,2);assert.throws(()=>parseAction(result('{"choice":9}'),vote),/不合法/);assert.throws(()=>parseAction(result('{}','content_filter'),speech),/正常结束/);});

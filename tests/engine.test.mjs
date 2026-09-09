@@ -11,7 +11,7 @@ import {
   killTarget,
   winner,
   beginNight,
-} from '../lib/game/engine.mjs';
+} from '../lib/game/engine-v1.mjs';
 function game() {
   return createGame({ mode: 'director', assigned: roles, demo: true });
 }
